@@ -6,9 +6,12 @@ import Keyboard
 import Time exposing (..)
 
 import Collage exposing (..)
+import Text exposing (..)
 import Element exposing (..)
 import Color
 import List
+
+import AnimationFrame exposing (..)
 
 import Debug exposing (..)
 
@@ -20,6 +23,11 @@ type alias Object =
     , x : Int
     , y : Int
     , color : Color.Color
+    }
+
+type alias ScoreBoard =
+    { player: Int
+    , enemy: Int
     }
 
 type alias Boundary =
@@ -42,6 +50,7 @@ type alias Game =
     , canvasWidth : Int
     , boundary : Boundary
     , ballDisplacement : Displacement
+    , scoreBoard: ScoreBoard
     }
 
 
@@ -56,7 +65,7 @@ initialState =
     { paddle =
         { width = 10
         , height = 50
-        , x = 0
+        , x = -380
         , y = 0
         , color = Color.blue
         }
@@ -78,8 +87,12 @@ initialState =
     , canvasWidth = 800
     , boundary = canvasBoundary
     , ballDisplacement =
-        { changeX = 1
-        , changeY = 1
+        { changeX = 3
+        , changeY = 4
+        }
+    , scoreBoard =
+        { player = 0
+        , enemy = 0
         }
     }
 init : ( Game, Cmd Msg )
@@ -98,16 +111,17 @@ view game =
         [ toForm <| .paddle game
         , toForm <| .ball game
         , toForm <| .enemy game
+        , toDisplayScore <| .scoreBoard game
         ]
 
-moveObject : Object -> Int -> Boundary -> Object
-moveObject object key boundary =
+moveObject : Object -> Int -> Boundary -> Int -> Object
+moveObject object key boundary speed =
     let
         displacement = case key of
             38 ->
-                20
+                speed
             40 ->
-                -20
+                speed * -1
             _ ->
                 0
         offset = if ((displacement > 0 && object.y >= boundary.top) ||
@@ -119,6 +133,21 @@ moveObject object key boundary =
     { object |
         y = object.y + offset
     }
+
+moveEnemy : Object -> Object -> Boundary -> Object
+moveEnemy enemy ball boundary =
+    let
+        enemyTop = toFloat enemy.y + (toFloat enemy.height / 2)
+        enemyBottom = toFloat enemy.y - (toFloat enemy.height / 2)
+        key =
+            if toFloat ball.y > enemyTop then
+                38
+            else if toFloat ball.y < enemyBottom then
+                40
+            else 0
+    in
+    moveObject enemy key boundary 15
+
 updateBall : Object -> Displacement -> Object
 updateBall ball displacement =
     { ball
@@ -132,7 +161,6 @@ updateDisplacement object boundary objects displacement =
     let
 
         boundVertical = (object.y >= boundary.top || object.y <= boundary.bottom)
-        boundHorizontal = (object.x >= boundary.right || object.x <= boundary.left)
 
         {- Assumption is that only the y direction will change -}
         collide : Object -> Bool -> Bool
@@ -165,7 +193,7 @@ updateDisplacement object boundary objects displacement =
         collideY = List.foldr collide False objects
 
         flipY = boundVertical
-        flipX = boundHorizontal || collideY
+        flipX = collideY
 
         newY =
             if flipY then
@@ -184,24 +212,59 @@ updateDisplacement object boundary objects displacement =
         , changeY = newY
     }
 
+resetIfOff : Game -> Game
+resetIfOff game =
+    let
+        canvasLeft = 0 - (toFloat game.canvasWidth) / 2
+        canvasRight = 0 + (toFloat game.canvasWidth) / 2
+        gameball = game.ball
+        resetBall =
+            {gameball
+            | x = 0
+            , y = 0}
+        scoreBoard = game.scoreBoard
+        playerWins = {
+            scoreBoard
+            | enemy = scoreBoard.enemy + 1
+        }
+        enemyWins = {
+            scoreBoard
+            | player = scoreBoard.player + 1
+        }
+    in
+    if toFloat game.ball.x < canvasLeft then
+        {game
+        | ball = resetBall
+        , scoreBoard = playerWins
+        }
+    else if toFloat game.ball.x > canvasRight then
+        {game
+        | ball = resetBall
+        , scoreBoard = enemyWins
+        }
+    else
+        game
+
 -- UPDATE
 update : Msg -> Game -> ( Game, Cmd Msg )
 update msg game =
     case msg of
         KeyMsg code ->
-            ( { game |
-                paddle = moveObject game.paddle code game.boundary
+            ( { game
+                | paddle = moveObject game.paddle code game.boundary 25
               }
             ,
             Cmd.none )
         Tick time ->
             let
                 disp = updateDisplacement game.ball game.boundary [game.paddle, game.enemy] game.ballDisplacement
+                updatedGame = { game
+                    | ballDisplacement = disp
+                    , ball = updateBall game.ball disp
+                    , enemy = moveEnemy game.enemy game.ball game.boundary
+                }
             in
-            ( { game |
-                ballDisplacement = disp
-                ,ball = updateBall game.ball disp
-            }, Cmd.none )
+            ( resetIfOff updatedGame, Cmd.none )
 
 -- SUBSCRIPTIONS
 
@@ -210,14 +273,18 @@ subscriptions : Game -> Sub Msg
 subscriptions game =
     Sub.batch
         [ Keyboard.downs KeyMsg
-        , Time.every millisecond Tick]
+        , times Tick]
 
 -- MAIN
+
+toDisplayScore : ScoreBoard -> Form
+toDisplayScore sb =
+    Collage.toForm <| centered <| concat <| List.map Text.fromString [toString sb.player, "     :     ", toString sb.enemy]
 
 toForm : Object -> Form
 toForm object =
     let shape = rect (toFloat <| .width object) (toFloat <| .height object)
-        border = outlined (solid Color.black) shape
+        border = outlined (solid object.color) shape
         toF = toFloat
     in move (toF object.x, toF object.y) <| group [filled object.color shape, border]
 
